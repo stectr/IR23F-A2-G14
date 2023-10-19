@@ -10,8 +10,8 @@ with open("stopwords.txt", 'r') as file:
     for line in file:
         stopwords.append(line.strip('\n'))
 
-global_links = []
-global_frequencies = {}
+# global_links = []
+# global_frequencies = {}
 frequenciesfile = 'frequencies.json'
 linksfile = 'links.json'
 
@@ -23,10 +23,11 @@ def tokenize(content):
 
 def wordfreq(tokenlist, tokenmap):
     for v in tokenlist:
-        if v not in tokenmap.keys():
-            tokenmap[v] = 1
-        else:
-            tokenmap[v] = tokenmap[v] + 1
+        if v not in stopwords:
+            if v not in tokenmap.keys():
+                tokenmap[v] = 1
+            else:
+                tokenmap[v] = tokenmap[v] + 1
 
 
 def printfreq(frequencies):
@@ -43,12 +44,16 @@ def printfreq(frequencies):
             continue
 
 
-def save_to_json(frequencies, filename):
+def load_frequencies(filename):
     data = {}
     if os.path.exists(filename):
         with open(filename, 'r') as file:
             data = json.load(file)
+    return data
 
+
+def save_frequencies(frequencies, filename):
+    data = {}
     for token, count in frequencies.items():
         if token not in stopwords:
             if token in data.keys():
@@ -97,17 +102,25 @@ def extract_next_links(url, resp):
     elif resp.status != 200:  # check status 200
         return []
     else:
-        if url not in global_links:
-            global_links.append(url)
         # parse using beautifulsoup
         soup = BeautifulSoup(resp.raw_response.content, "lxml")
         links = soup.find_all("a")  # find all hyperlinks
 
         text = soup.get_text()
-        tokened = tokenize(text)  # tokened the html content
-        wordfreq(tokened, global_frequencies)
-        save_to_json(global_frequencies, 'frequencies.json')
+        tokened = tokenize(text)  # tokenize the text
 
+        global_links = load_links("links.json")
+        global_frequencies = load_frequencies("frequencies.json")
+
+        if url not in global_links:
+            #     global_links.append(url)
+            # add tokens to global_frequencies
+            global_links.append(url)  # add link to links visited
+            wordfreq(tokened, global_frequencies)
+            save_links(global_links, "links.json")
+            save_frequencies(global_frequencies, "frequencies.json")
+
+        # the meat of extracting next set of links
         extracted_links = []
         for link in links:
             href = link.get("href")  # pull out only the raw link in text form
@@ -115,7 +128,8 @@ def extract_next_links(url, resp):
                 if link not in global_links:
                     # it it is, append it to the extracted links
                     extracted_links.append(href)
-                    global_links.append(href)  # add to links gone through
+                    # global_links.append(href)  # add to links gone through
+
         return extracted_links
 
 
