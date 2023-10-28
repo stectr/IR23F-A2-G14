@@ -3,6 +3,9 @@ from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 import json
 import os
+import robotexclusionrulesparser
+import xml.etree.ElementTree as ET
+
 
 # import stopwords
 stopwords = []
@@ -11,9 +14,10 @@ with open("stopwords.txt", 'r') as file:
         stopwords.append(line.strip('\n'))
 
 # global_links = []
-# global_frequencies = {}
+global_frequencies = {}
 frequenciesfile = 'frequencies.json'
 linksfile = 'links.json'
+counter = 0
 
 
 def tokenize(content):
@@ -28,6 +32,18 @@ def wordfreq(tokenlist, tokenmap):
                 tokenmap[v] = 1
             else:
                 tokenmap[v] = tokenmap[v] + 1
+                
+
+def uniqueTokens(tokenlist):
+    freq = {}
+    for v in tokenlist:
+        if v not in stopwords:
+            if v not in freq.keys():
+                freq[v] = 1
+            else:
+                freq[v] = freq[v] + 1
+                
+    return freq.length()
 
 
 def printfreq(frequencies):
@@ -86,6 +102,8 @@ def scraper(url, resp):
 
 
 def extract_next_links(url, resp):
+    global counter
+    global global_frequencies
     # Implementation required.
     # url: the URL that was used to get the page
     # resp.url: the actual url of the page
@@ -99,9 +117,20 @@ def extract_next_links(url, resp):
 
     if not is_valid(url):  # check if valid url first
         return []
-    elif resp.status != 200:  # check status 200
+    elif resp.status < 200 or resp.status > 399:  # check status 200
         return []
+    elif is_large_file(url, resp):
+        return []
+    # elif not check_robots(url):
+    #     return []
     else:
+          # Fetch sitemap and return links from sitemap if available
+        # parsed_url = urlparse(url)
+        # sitemap_url = f"{parsed_url.scheme}://{parsed_url.netloc}/sitemap.xml"
+        # sitemap_links = fetch_sitemap(sitemap_url, resp)
+        # if sitemap_links:
+        #     return sitemap_links
+        
         # parse using beautifulsoup
         soup = BeautifulSoup(resp.raw_response.content, "lxml")
         links = soup.find_all("a")  # find all hyperlinks
@@ -110,15 +139,22 @@ def extract_next_links(url, resp):
         tokened = tokenize(text)  # tokenize the text
 
         global_links = load_links("links.json")
-        global_frequencies = load_frequencies("frequencies.json")
+        if counter == 0:
+            global_frequencies = load_frequencies("frequencies.json")
 
-        if url not in global_links:
+        if resp.raw_response.url not in global_links:
             #     global_links.append(url)
             # add tokens to global_frequencies
-            global_links.append(url)  # add link to links visited
-            wordfreq(tokened, global_frequencies)
+            
+            # if uniqueToken(tokened) > 30:
+            global_links.append(resp.raw_response.url)  # add link to links visited
             save_links(global_links, "links.json")
-            save_frequencies(global_frequencies, "frequencies.json")
+            
+            wordfreq(tokened, global_frequencies)
+            counter += 1
+            if counter == 200:
+                save_frequencies(global_frequencies, "frequencies.json")
+                counter = 0
 
         # the meat of extracting next set of links
         extracted_links = []
@@ -161,6 +197,11 @@ def is_uci(url):
     # a copy of the is_valid function but with the inclusion of checking if it is an ics.uci.edu link
     try:
         parsed = urlparse(url)
+    except ValueError as e:
+        print(f"Error parsing URL {url}: {e}")
+        return False  # Return False or handle the error in some other way
+    
+    try:
         if parsed.scheme not in set(["http", "https"]):
             return False
 
@@ -181,8 +222,82 @@ def is_uci(url):
         print("TypeError for ", parsed)
         raise
 
+def check_robots(url):
+    parsed_url = urlparse(url)
+    robots_url = f"{parsed_url.scheme}://{parsed_url.netloc}/robots.txt"
+    robots_parser = robotexclusionrulesparser.RobotFileParserLookalike()
+    try:
+        robots_parser.url = robots_url
+        robots_parser.read()
+        return robots_parser.is_allowed("*", url)
+    except:
+        return True  # Allow crawling if robots.txt is unreachable or improperly formatted
+    
+def is_large_file(url, resp, size_threshold=10*1024*1024, token_threshold=100):
+    """
+    Check if a file is large and contains a low count of tokenized data.
+    
+    :param url: The URL of the file.
+    :param resp: The response object.
+    :param size_threshold: The file size threshold (default is 10 MB).
+    :param token_threshold: The token count threshold (default is 100).
+    :return: True if the file is large and has a low token count, False otherwise.
+    """
+    if resp.status == 200:
+        # Check file size
+        content_length = int(resp.raw_response.headers.get('Content-Length', 0))
+        is_large_file = content_length > size_threshold
+        
+        # Tokenize the content
+        content = resp.raw_response.content.decode('utf-8', errors='ignore')
+        tokens = tokenize(content)
+        token_count = len(tokens)
+        has_low_token_count = token_count < token_threshold
+        # print(f"Failed to parse XML from {url}")
+        
+        if is_large_file and has_low_token_count:
+            print("File was large with low content")
+
+        return is_large_file and has_low_token_count
+
+    return False
+
+
+def fetch_sitemap(url, resp):
+    try:
+        # Attempt to parse the XML content
+        root = ET.fromstring(resp.raw_response.content)
+    except ET.ParseError as e:
+        # Log the error and the location of the error in the XML
+        print(f"XML Parse Error at {e.position}: {e.msg}")
+        print(f"Failed to parse XML from {url}")
+        return []
+
+    # Check if this is a sitemap index
+    if root.tag == '{http://www.sitemaps.org/schemas/sitemap/0.9}sitemapindex':
+
+        print("there is an xml!")
+        # It's a sitemap index, so fetch and parse the sitemaps listed in the index
+        sitemap_links = []
+        for sitemap in root.findall('{http://www.sitemaps.org/schemas/sitemap/0.9}sitemap'):
+            loc = sitemap.find('{http://www.sitemaps.org/schemas/sitemap/0.9}loc')
+            if loc is not None:
+                sitemap_url = loc.text
+                sitemap_resp = fetch_url(sitemap_url)  # Use your function instead of requests.get
+                if sitemap_resp.status == 200:
+                    sitemap_root = ET.fromstring(sitemap_resp.raw_response.content)
+                    sitemap_links.extend([child.text for child in sitemap_root.iter('{http://www.sitemaps.org/schemas/sitemap/0.9}loc')])
+                else:
+                    print(f"Failed to fetch sitemap from {sitemap_url}")
+        return sitemap_links
+    else:
+        # It's a regular sitemap, so extract and return the URLs
+        return [child.text for child in root.iter('{http://www.sitemaps.org/schemas/sitemap/0.9}loc')]
+
 
 # testing the parsing
+
+
 if __name__ == "__main__":
     # at first i thought a dictionary would suffice but it wouldn't work
     # so i resorted to utilizing class inside class to allow for attributes
@@ -207,3 +322,16 @@ if __name__ == "__main__":
     print("Extracted links:")
     for link in extracted_links:
         print(link)
+    
+    
+    
+    # Test check_robots function
+    robots_test_url = "https://www.ics.uci.edu"
+    print(f"Robots.txt check for {robots_test_url}: {check_robots(robots_test_url)}")
+
+    # Test fetch_sitemap function
+    sitemap_test_url = "https://www.ics.uci.edu/sitemap.xml"
+    # Create a dummy response object for sitemap_test_url
+    dummy_resp = ResponseMain(sitemap_test_url, 200, "<xml></xml>")  # assuming the content is not important for this test
+    sitemap_links = fetch_sitemap(sitemap_test_url, dummy_resp)
+    print(f"Sitemap links for {sitemap_test_url}: {sitemap_links}")
