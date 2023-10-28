@@ -5,6 +5,7 @@ import json
 import os
 import robotexclusionrulesparser
 import xml.etree.ElementTree as ET
+import atexit
 
 
 # import stopwords
@@ -13,10 +14,11 @@ with open("stopwords.txt", 'r') as file:
     for line in file:
         stopwords.append(line.strip('\n'))
 
-# global_links = []
+global_links = []
 global_frequencies = {}
 frequenciesfile = 'frequencies.json'
 linksfile = 'links.json'
+initflag = False
 counter = 0
 
 
@@ -43,7 +45,7 @@ def uniqueTokens(tokenlist):
             else:
                 freq[v] = freq[v] + 1
                 
-    return freq.length()
+    return len(freq)
 
 
 def printfreq(frequencies):
@@ -95,6 +97,11 @@ def save_links(links, filename):
     with open(filename, 'w') as file:
         json.dump(links, file)
 
+def save_protocol():
+    global global_frequencies
+    global global_links
+    save_frequencies(global_frequencies, "frequencies.json")
+    save_links(global_links, "links.json")
 
 def scraper(url, resp):
     links = extract_next_links(url, resp)
@@ -104,6 +111,8 @@ def scraper(url, resp):
 def extract_next_links(url, resp):
     global counter
     global global_frequencies
+    global global_links
+    global initflag
     # Implementation required.
     # url: the URL that was used to get the page
     # resp.url: the actual url of the page
@@ -114,7 +123,11 @@ def extract_next_links(url, resp):
     #         resp.raw_response.content: the content of the page!
     # Return a list with the hyperlinks (as strings) scrapped from resp.raw_response.content
     # return list()
-
+    
+    if initflag == False:
+        initflag = True
+        atexit.register(save_protocol)
+    
     if not is_valid(url):  # check if valid url first
         return []
     elif resp.status < 200 or resp.status > 399:  # check status 200
@@ -137,22 +150,22 @@ def extract_next_links(url, resp):
 
         text = soup.get_text()
         tokened = tokenize(text)  # tokenize the text
-
-        global_links = load_links("links.json")
+    
         if counter == 0:
+            global_links = load_links("links.json")
             global_frequencies = load_frequencies("frequencies.json")
 
         if resp.raw_response.url not in global_links:
             #     global_links.append(url)
             # add tokens to global_frequencies
             
-            # if uniqueToken(tokened) > 30:
-            global_links.append(resp.raw_response.url)  # add link to links visited
-            save_links(global_links, "links.json")
-            
-            wordfreq(tokened, global_frequencies)
+            if uniqueTokens(tokened) > 20:
+                global_links.append(resp.raw_response.url)  # add link to links visited
+                wordfreq(tokened, global_frequencies)
+                
             counter += 1
             if counter == 200:
+                save_links(global_links, "links.json")
                 save_frequencies(global_frequencies, "frequencies.json")
                 counter = 0
 
@@ -233,7 +246,7 @@ def check_robots(url):
     except:
         return True  # Allow crawling if robots.txt is unreachable or improperly formatted
     
-def is_large_file(url, resp, size_threshold=10*1024*1024, token_threshold=100):
+def is_large_file(url, resp, size_threshold=1*1024*1024, token_threshold=100):
     """
     Check if a file is large and contains a low count of tokenized data.
     
