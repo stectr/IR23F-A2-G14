@@ -155,12 +155,12 @@ def extract_next_links(url, resp):
             global_links = load_links("links.json")
             global_frequencies = load_frequencies("frequencies.json")
 
-        if resp.raw_response.url not in global_links:
+        if url not in global_links:
             #     global_links.append(url)
             # add tokens to global_frequencies
             
-            if uniqueTokens(tokened) > 20:
-                global_links.append(resp.raw_response.url)  # add link to links visited
+            if uniqueTokens(tokened) > 10:
+                global_links.append(url)  # add link to links visited
                 wordfreq(tokened, global_frequencies)
                 
             counter += 1
