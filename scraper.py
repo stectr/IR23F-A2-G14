@@ -1,5 +1,6 @@
 import re
 from urllib.parse import urlparse
+from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 import json
 import os
@@ -13,40 +14,29 @@ stopwords = []
 with open("stopwords.txt", 'r') as file:
     for line in file:
         stopwords.append(line.strip('\n'))
-
+###################       
+initflag = False
 global_links = []
 global_frequencies = {}
-frequenciesfile = 'frequencies.json'
-linksfile = 'links.json'
-initflag = False
+#global_pagelist = []
+#frequenciesfile = 'frequencies.json'
+#linksfile = 'links.json'
 counter = 0
+maxWords = (0,"")
 
-
+# Tokenizes the content in the string
 def tokenize(content):
     tokens = re.findall(r'[a-z]+', content.lower())
     return tokens
 
-
+# Checks tokens and log its frequency
 def wordfreq(tokenlist, tokenmap):
     for v in tokenlist:
         if v not in stopwords:
             if v not in tokenmap.keys():
                 tokenmap[v] = 1
             else:
-                tokenmap[v] = tokenmap[v] + 1
-                
-
-def uniqueTokens(tokenlist):
-    freq = {}
-    for v in tokenlist:
-        if v not in stopwords:
-            if v not in freq.keys():
-                freq[v] = 1
-            else:
-                freq[v] = freq[v] + 1
-                
-    return len(freq)
-
+                tokenmap[v] = tokenmap[v] + 1     
 
 def printfreq(frequencies):
     sorted_frequencies = sorted(
@@ -69,6 +59,18 @@ def load_frequencies(filename):
             data = json.load(file)
     return data
 
+def load_links(filename):
+    data = (0,"")
+    if os.path.exists(filename):
+        with open(filename, 'r') as file:
+            data = json.load(file)
+    return data
+
+
+def save_links(links, filename):
+    with open(filename, 'w') as file:
+        json.dump(links, file)
+
 
 def save_frequencies(frequencies, filename):
     data = {}
@@ -85,23 +87,24 @@ def save_frequencies(frequencies, filename):
         json.dump(sorteddata, file)
 
 
-def load_links(filename):
+def load_report(filename):
     data = []
     if os.path.exists(filename):
         with open(filename, 'r') as file:
             data = json.load(file)
     return data
 
-
-def save_links(links, filename):
+def report(attr, filename):
     with open(filename, 'w') as file:
-        json.dump(links, file)
+        json.dump(attr, file)
 
 def save_protocol():
     global global_frequencies
     global global_links
+    global maxWords
     save_frequencies(global_frequencies, "frequencies.json")
     save_links(global_links, "links.json")
+    report( maxWords , "report.json")
 
 def scraper(url, resp):
     links = extract_next_links(url, resp)
@@ -112,7 +115,9 @@ def extract_next_links(url, resp):
     global counter
     global global_frequencies
     global global_links
+    #global global_pagelist
     global initflag
+    global maxWords
     # Implementation required.
     # url: the URL that was used to get the page
     # resp.url: the actual url of the page
@@ -126,6 +131,9 @@ def extract_next_links(url, resp):
     
     if initflag == False:
         initflag = True
+        global_links = load_links("links.json")
+        global_frequencies = load_frequencies("frequencies.json")
+        maxWords = load_report("report.json")
         atexit.register(save_protocol)
     
     if not is_valid(url):  # check if valid url first
@@ -134,43 +142,52 @@ def extract_next_links(url, resp):
         return []
     elif is_large_file(url, resp):
         return []
-    # elif not check_robots(url):
-    #     return []
     else:
-          # Fetch sitemap and return links from sitemap if available
-        # parsed_url = urlparse(url)
-        # sitemap_url = f"{parsed_url.scheme}://{parsed_url.netloc}/sitemap.xml"
-        # sitemap_links = fetch_sitemap(sitemap_url, resp)
-        # if sitemap_links:
-        #     return sitemap_links
-        
+
         # parse using beautifulsoup
         soup = BeautifulSoup(resp.raw_response.content, "lxml")
         links = soup.find_all("a")  # find all hyperlinks
 
         text = soup.get_text()
         tokened = tokenize(text)  # tokenize the text
-    
-        if counter == 0:
-            global_links = load_links("links.json")
-            global_frequencies = load_frequencies("frequencies.json")
 
-        if resp.raw_response.url not in global_links:
+        if url not in global_links:
             #     global_links.append(url)
             # add tokens to global_frequencies
+            pageData = wordfreq(tokened, global_frequencies) # Add frequency of tokens to the global frequencies and also returns a sorted list of tokens for this page
+            # for page in global_pagelist:
+            #     if pageData == page:
+            #         return [];
             
-            if uniqueTokens(tokened) > 20:
-                global_links.append(resp.raw_response.url)  # add link to links visited
-                wordfreq(tokened, global_frequencies)
+            if len(tokened) > 10:
+                global_links.append(url)  # add link to links visited
+                if maxWords and len(tokened) > maxWords[0]:
+                    maxWords = (len(tokened), url)
+                elif not maxWords:
+                    maxWords = (len(tokened), url)
                 
             counter += 1
-            if counter == 200:
+            if counter >= 100: # updates json every 100 passes
                 save_links(global_links, "links.json")
                 save_frequencies(global_frequencies, "frequencies.json")
+                report(maxWords, "report.json")
                 counter = 0
 
         # the meat of extracting next set of links
         extracted_links = []
+        #Converting relative to absolute. Something went wrong here
+        # for link in links:
+        #     href = link.get("href")  # pull out the raw link in text form
+        #     #print(href)
+        #     if href:
+        #         if not urlparse(href).netloc: # check if href is a relative URL
+        #             absolute_url = urljoin(resp.raw_response.url, href)  # convert to an absolute URL
+        #         else:
+        #             absolute_url = href  # it's already an absolute URL
+        #         if is_uci(absolute_url) and absolute_url not in extracted_links:
+        #             extracted_links.append(absolute_url)  # append the absolute URL
+        #         # global_links.append(href)  # add to links gone through
+        
         for link in links:
             href = link.get("href")  # pull out only the raw link in text form
             if href and is_uci(href):  # check to see if its a uci link
@@ -220,7 +237,10 @@ def is_uci(url):
 
         if not parsed.netloc.endswith("ics.uci.edu"):
             return False
-
+        
+        if parsed.fragment:  # check if fragment
+            return False
+        
         return not re.match(
             r".*\.(css|js|bmp|gif|jpe?g|ico"
             + r"|png|tiff?|mid|mp2|mp3|mp4"
